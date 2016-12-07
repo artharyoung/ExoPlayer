@@ -32,6 +32,8 @@ import com.google.android.exoplayer2.source.SequenceableLoader;
 import com.google.android.exoplayer2.source.TrackGroup;
 import com.google.android.exoplayer2.source.TrackGroupArray;
 import com.google.android.exoplayer2.source.chunk.Chunk;
+import com.google.android.exoplayer2.source.hls.playlist.HlsMasterPlaylist;
+import com.google.android.exoplayer2.source.hls.playlist.HlsMasterPlaylist.HlsUrl;
 import com.google.android.exoplayer2.trackselection.TrackSelection;
 import com.google.android.exoplayer2.upstream.Allocator;
 import com.google.android.exoplayer2.upstream.Loader;
@@ -58,10 +60,10 @@ import java.util.LinkedList;
     void onPrepared();
 
     /**
-     * Called to schedule a {@link #continueLoading(long)} call.
+     * Called to schedule a {@link #continueLoading(long)} call when the playlist referred by the
+     * given url changes.
      */
-    void onContinueLoadingRequiredInMs(HlsSampleStreamWrapper sampleStreamSource,
-        long delayMs);
+    void onPlaylistRefreshRequired(HlsMasterPlaylist.HlsUrl playlistUrl);
 
   }
 
@@ -144,8 +146,10 @@ import java.util.LinkedList;
     pendingResetPositionUs = positionUs;
   }
 
-  public void prepare() {
-    continueLoading(lastSeekPositionUs);
+  public void continuePreparing() {
+    if (!prepared) {
+      continueLoading(lastSeekPositionUs);
+    }
   }
 
   /**
@@ -154,19 +158,12 @@ import java.util.LinkedList;
    */
   public void prepareSingleTrack(Format format) {
     track(0).format(format);
-    endTracks();
+    sampleQueuesBuilt = true;
+    maybeFinishPrepare();
   }
 
   public void maybeThrowPrepareError() throws IOException {
     maybeThrowError();
-  }
-
-  public long getDurationUs() {
-    return chunkSource.getDurationUs();
-  }
-
-  public boolean isLive() {
-    return chunkSource.isLive();
   }
 
   public TrackGroupArray getTrackGroups() {
@@ -278,6 +275,14 @@ import java.util.LinkedList;
     return largestQueuedTimestampUs;
   }
 
+  public void setIsTimestampMaster(boolean isTimestampMaster) {
+    chunkSource.setIsTimestampMaster(isTimestampMaster);
+  }
+
+  public void onPlaylistLoadError(HlsUrl url, IOException error) {
+    chunkSource.onPlaylistLoadError(url, error);
+  }
+
   // SampleStream implementation.
 
   /* package */ boolean isReady(int group) {
@@ -328,7 +333,7 @@ import java.util.LinkedList;
 
   @Override
   public boolean continueLoading(long positionUs) {
-    if (loader.isLoading()) {
+    if (loadingFinished || loader.isLoading()) {
       return false;
     }
 
@@ -337,7 +342,7 @@ import java.util.LinkedList;
         nextChunkHolder);
     boolean endOfStream = nextChunkHolder.endOfStream;
     Chunk loadable = nextChunkHolder.chunk;
-    long retryInMs = nextChunkHolder.retryInMs;
+    HlsMasterPlaylist.HlsUrl playlistToLoad = nextChunkHolder.playlist;
     nextChunkHolder.clear();
 
     if (endOfStream) {
@@ -346,9 +351,8 @@ import java.util.LinkedList;
     }
 
     if (loadable == null) {
-      if (retryInMs != C.TIME_UNSET) {
-        Assertions.checkState(chunkSource.isLive());
-        callback.onContinueLoadingRequiredInMs(this, retryInMs);
+      if (playlistToLoad != null) {
+        callback.onPlaylistRefreshRequired(playlistToLoad);
       }
       return false;
     }
@@ -589,7 +593,7 @@ import java.util.LinkedList;
         if (primaryExtractorTrackType == PRIMARY_TYPE_VIDEO) {
           if (MimeTypes.isAudio(sampleFormat.sampleMimeType)) {
             trackFormat = muxedAudioFormat;
-          } else if (MimeTypes.APPLICATION_EIA608.equals(sampleFormat.sampleMimeType)) {
+          } else if (MimeTypes.APPLICATION_CEA608.equals(sampleFormat.sampleMimeType)) {
             trackFormat = muxedCaptionFormat;
           }
         }

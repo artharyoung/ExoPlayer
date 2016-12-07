@@ -24,13 +24,12 @@ import com.google.android.exoplayer2.extractor.ExtractorOutput;
 import com.google.android.exoplayer2.extractor.PositionHolder;
 import com.google.android.exoplayer2.extractor.SeekMap;
 import com.google.android.exoplayer2.extractor.TrackOutput;
-import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.android.exoplayer2.util.ParsableByteArray;
 import com.google.android.exoplayer2.util.Util;
 import java.io.IOException;
 
 /**
- * Extracts EIA-608 data from a RawCC file
+ * Extracts CEA data from a RawCC file.
  */
 public final class RawCcExtractor implements Extractor {
 
@@ -45,9 +44,10 @@ public final class RawCcExtractor implements Extractor {
   private static final int STATE_READING_TIMESTAMP_AND_COUNT = 1;
   private static final int STATE_READING_SAMPLES = 2;
 
+  private final Format format;
+
   private final ParsableByteArray dataScratch;
 
-  private ExtractorOutput extractorOutput;
   private TrackOutput trackOutput;
 
   private int parserState;
@@ -56,20 +56,18 @@ public final class RawCcExtractor implements Extractor {
   private int remainingSampleCount;
   private int sampleBytesWritten;
 
-  public RawCcExtractor() {
+  public RawCcExtractor(Format format) {
+    this.format = format;
     dataScratch = new ParsableByteArray(SCRATCH_SIZE);
     parserState = STATE_READING_HEADER;
   }
 
   @Override
   public void init(ExtractorOutput output) {
-    this.extractorOutput = output;
-    extractorOutput.seekMap(new SeekMap.Unseekable(C.TIME_UNSET));
-    trackOutput = extractorOutput.track(0);
-    extractorOutput.endTracks();
-
-    trackOutput.format(Format.createTextSampleFormat(null, MimeTypes.APPLICATION_EIA608,
-        null, Format.NO_VALUE, 0, null, null));
+    output.seekMap(new SeekMap.Unseekable(C.TIME_UNSET));
+    trackOutput = output.track(0);
+    output.endTracks();
+    trackOutput.format(format);
   }
 
   @Override
@@ -154,13 +152,8 @@ public final class RawCcExtractor implements Extractor {
       dataScratch.reset();
       input.readFully(dataScratch.data, 0, 3);
 
-      // only accept EIA-608 packets which have validity (6th bit) == 1 and
-      // type (7-8th bits) == 0; i.e. ccDataPkt[0] == 0bXXXXX100
-      int ccValidityAndType = dataScratch.readUnsignedByte() & 0x07;
-      if (ccValidityAndType == 0x04) {
-        trackOutput.sampleData(dataScratch, 2);
-        sampleBytesWritten += 2;
-      }
+      trackOutput.sampleData(dataScratch, 3);
+      sampleBytesWritten += 3;
     }
 
     if (sampleBytesWritten > 0) {
